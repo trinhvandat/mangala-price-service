@@ -57,7 +57,11 @@ Thumbs.db
 
 # Keep example env files
 !.env.example
-!.env.staging
+!.env.*.example
+
+# Docker generated deployment files (created by CI/CD)
+docker-compose.deploy.yml
+docker-compose.prod.yml
 
 # Application
 logs/

@@ -1,0 +1,263 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run tests
+        run: mvn test -B
+
+      - name: Build with Maven
+        run: mvn package -DskipTests -B
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          retention-days: 1
+
+  build-and-push-image:
+    name: Build and Push Docker Image
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=staging-
+            type=raw,value=staging-latest
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Staging VPS
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+
+            # Navigate to project directory
+            cd ~/mangala-price-service || mkdir -p ~/mangala-price-service && cd ~/mangala-price-service
+
+            # Pull latest code
+            if [ -d .git ]; then
+              git fetch origin
+              git reset --hard origin/develop
+            else
+              git clone -b develop https://github.com/${{ github.repository }}.git .
+            fi
+
+            # Login to GitHub Container Registry
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Pull the latest image
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest
+
+            # Create .env file from secrets
+            cat > .env << 'EOF'
+            SPRING_PROFILES_ACTIVE=staging
+            REDIS_URL=${{ secrets.REDIS_URL || 'redis://redis:6379' }}
+            KAFKA_ENABLED=${{ secrets.KAFKA_ENABLED || 'true' }}
+            KAFKA_BOOTSTRAP_SERVERS=${{ secrets.KAFKA_BOOTSTRAP_SERVERS || 'kafka:9092' }}
+            COINGECKO_BASE_URL=${{ secrets.COINGECKO_BASE_URL || 'https://api.coingecko.com/api/v3' }}
+            COINGECKO_TOKENS=${{ secrets.COINGECKO_TOKENS || 'bitcoin,ethereum,binancecoin,matic-network,solana,usd-coin,tether,avalanche-2,arbitrum,optimism' }}
+            PRICE_SCHEDULER_ENABLED=${{ secrets.PRICE_SCHEDULER_ENABLED || 'true' }}
+            PRICE_SCHEDULER_INTERVAL=${{ secrets.PRICE_SCHEDULER_INTERVAL || '60000' }}
+            EOF
+
+            # Update docker-compose to use pre-built image
+            cat > docker-compose.deploy.yml << 'COMPOSE'
+            services:
+              price-service:
+                image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest
+                container_name: mangala-price-service
+                restart: unless-stopped
+                ports:
+                  - "8080:8080"
+                env_file:
+                  - .env
+                environment:
+                  - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Xms256m -Xmx512m
+                depends_on:
+                  redis:
+                    condition: service_healthy
+                  kafka:
+                    condition: service_healthy
+                networks:
+                  - mangala-network
+                healthcheck:
+                  test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
+                  interval: 30s
+                  timeout: 10s
+                  retries: 3
+                  start_period: 60s
+                deploy:
+                  resources:
+                    limits:
+                      memory: 768M
+                    reservations:
+                      memory: 256M
+
+              redis:
+                image: redis:7-alpine
+                container_name: mangala-redis
+                restart: unless-stopped
+                volumes:
+                  - redis-data:/data
+                networks:
+                  - mangala-network
+                healthcheck:
+                  test: ["CMD", "redis-cli", "ping"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 3
+                command: redis-server --appendonly yes
+
+              zookeeper:
+                image: confluentinc/cp-zookeeper:7.5.0
+                container_name: mangala-zookeeper
+                restart: unless-stopped
+                environment:
+                  ZOOKEEPER_CLIENT_PORT: 2181
+                  ZOOKEEPER_TICK_TIME: 2000
+                networks:
+                  - mangala-network
+                healthcheck:
+                  test: ["CMD", "nc", "-z", "localhost", "2181"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 3
+
+              kafka:
+                image: confluentinc/cp-kafka:7.5.0
+                container_name: mangala-kafka
+                restart: unless-stopped
+                depends_on:
+                  zookeeper:
+                    condition: service_healthy
+                environment:
+                  KAFKA_BROKER_ID: 1
+                  KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                  KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+                  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+                networks:
+                  - mangala-network
+                healthcheck:
+                  test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+                  interval: 30s
+                  timeout: 10s
+                  retries: 3
+                  start_period: 30s
+
+            networks:
+              mangala-network:
+                driver: bridge
+
+            volumes:
+              redis-data:
+            COMPOSE
+
+            # Stop and remove old containers
+            docker compose -f docker-compose.deploy.yml down --remove-orphans || true
+
+            # Start services
+            docker compose -f docker-compose.deploy.yml up -d
+
+            # Wait for health check
+            echo "Waiting for service to be healthy..."
+            sleep 30
+
+            # Verify deployment
+            for i in {1..10}; do
+              if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
+                echo "✅ Service is healthy!"
+                exit 0
+              fi
+              echo "Waiting... ($i/10)"
+              sleep 10
+            done
+
+            echo "❌ Health check failed"
+            docker compose -f docker-compose.deploy.yml logs --tail=50 price-service
+            exit 1
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment to staging successful!"
+            echo "Service URL: https://price-staging.mangala.dev"
+          else
+            echo "❌ Deployment failed!"
+          fi
