@@ -103,6 +103,7 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
+          command_timeout: 15m
           script: |
             set -e
 
@@ -159,8 +160,8 @@ jobs:
                   test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
                   interval: 30s
                   timeout: 10s
-                  retries: 3
-                  start_period: 60s
+                  retries: 5
+                  start_period: 120s
                 deploy:
                   resources:
                     limits:
@@ -234,22 +235,26 @@ jobs:
             # Start services
             docker compose -f docker-compose.deploy.yml up -d
 
-            # Wait for health check
-            echo "Waiting for service to be healthy..."
-            sleep 30
+            # Wait for Spring Boot + Kafka initialization
+            echo "Waiting for service to start (Spring Boot + Kafka needs ~2-3 min)..."
+            sleep 60
 
-            # Verify deployment
-            for i in {1..10}; do
+            # Verify deployment with extended timeout for Java apps
+            for i in {1..20}; do
               if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
                 echo "✅ Service is healthy!"
+                docker compose -f docker-compose.deploy.yml ps
                 exit 0
               fi
-              echo "Waiting... ($i/10)"
-              sleep 10
+              echo "Waiting for health check... ($i/20)"
+              sleep 15
             done
 
-            echo "❌ Health check failed"
-            docker compose -f docker-compose.deploy.yml logs --tail=50 price-service
+            echo "❌ Health check failed after 5+ minutes"
+            echo "=== Container Status ==="
+            docker compose -f docker-compose.deploy.yml ps
+            echo "=== Price Service Logs ==="
+            docker compose -f docker-compose.deploy.yml logs --tail=100 price-service
             exit 1
 
       - name: Notify deployment status

@@ -6,6 +6,9 @@
 # ALL values must be supplied via environment variables — no defaults.
 # =============================================================================
 
+server:
+  port: 8080
+
 spring:
   data:
     redis:
