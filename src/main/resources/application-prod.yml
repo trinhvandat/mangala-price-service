@@ -1,0 +1,51 @@
+# =============================================================================
+# mangala-price-service - Production Profile
+# =============================================================================
+# Activated with: --spring.profiles.active=prod
+# Inherits all defaults from application.yml and overrides below.
+# ALL values must be supplied via environment variables — no defaults.
+# =============================================================================
+
+spring:
+  data:
+    redis:
+      url: ${REDIS_URL}
+
+  kafka:
+    enabled: ${KAFKA_ENABLED:true}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      # Require acknowledgement from all in-sync replicas
+      acks: all
+      retries: 5
+      batch-size: 16384
+      linger-ms: 10
+      buffer-memory: 33554432
+
+price:
+  coingecko:
+    base-url: ${COINGECKO_BASE_URL:https://api.coingecko.com/api/v3}
+    tokens: ${COINGECKO_TOKENS:bitcoin,ethereum,binancecoin,matic-network,solana,usd-coin,tether,avalanche-2,arbitrum,optimism}
+
+  scheduler:
+    enabled: ${PRICE_SCHEDULER_ENABLED:true}
+    # Fetch every 2 minutes in production to stay within CoinGecko rate limits
+    interval-ms: ${PRICE_SCHEDULER_INTERVAL:120000}
+    # 15-second warm-up before first fetch
+    initial-delay-ms: ${PRICE_SCHEDULER_INITIAL_DELAY:15000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: WARN
+    org.mangala.price: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-}] [%X{spanId:-}] %-5level %logger{36} - %msg%n"

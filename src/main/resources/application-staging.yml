@@ -1,0 +1,49 @@
+# =============================================================================
+# mangala-price-service - Staging Profile
+# =============================================================================
+# Activated with: --spring.profiles.active=staging
+# Inherits all defaults from application.yml and overrides below.
+# =============================================================================
+
+spring:
+  data:
+    redis:
+      url: ${REDIS_URL}
+
+  kafka:
+    enabled: ${KAFKA_ENABLED:true}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      acks: all
+      retries: 3
+      batch-size: 16384
+      linger-ms: 10
+      buffer-memory: 33554432
+
+price:
+  coingecko:
+    base-url: ${COINGECKO_BASE_URL:https://api.coingecko.com/api/v3}
+    tokens: ${COINGECKO_TOKENS:bitcoin,ethereum,binancecoin,matic-network,solana,usd-coin,tether,avalanche-2,arbitrum,optimism}
+
+  scheduler:
+    enabled: ${PRICE_SCHEDULER_ENABLED:true}
+    # Fetch every 60 seconds in staging (halved to reduce CoinGecko API calls)
+    interval-ms: ${PRICE_SCHEDULER_INTERVAL:60000}
+    # 10-second warm-up before first fetch
+    initial-delay-ms: ${PRICE_SCHEDULER_INITIAL_DELAY:10000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: INFO
+    org.mangala.price: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-}] [%X{spanId:-}] %-5level %logger{36} - %msg%n"

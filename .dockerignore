@@ -1,0 +1,27 @@
+# Build outputs
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+*.md
+LICENSE
+
+# Local config
+.env
+.env.*
+
+# OMC
+.omc/

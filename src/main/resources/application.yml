@@ -1,0 +1,60 @@
+spring:
+  threads:
+    virtual:
+      enabled: true
+
+  application:
+    name: mangala-price-service
+
+  # Redis for price caching
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+
+  # Kafka for event publishing
+  kafka:
+    enabled: ${KAFKA_ENABLED:true}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9094}
+    producer:
+      acks: all
+      retries: 3
+      batch-size: 16384
+      linger-ms: 10
+      buffer-memory: 33554432
+
+server:
+  port: 8084
+
+# Price Feed Configuration
+price:
+  coingecko:
+    base-url: ${COINGECKO_BASE_URL:https://api.coingecko.com/api/v3}
+    # Common tokens to fetch (CoinGecko IDs)
+    tokens: ${COINGECKO_TOKENS:bitcoin,ethereum,binancecoin,matic-network,solana,usd-coin,tether,avalanche-2,arbitrum,optimism}
+
+  scheduler:
+    enabled: ${PRICE_SCHEDULER_ENABLED:true}
+    # Fetch interval in milliseconds (default: 30 seconds)
+    interval-ms: ${PRICE_SCHEDULER_INTERVAL:30000}
+    # Initial delay before first fetch (default: 5 seconds)
+    initial-delay-ms: ${PRICE_SCHEDULER_INITIAL_DELAY:5000}
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    root: INFO
+    org.mangala.price: DEBUG
